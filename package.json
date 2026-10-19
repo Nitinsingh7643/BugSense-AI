@@ -1,0 +1,14 @@
+{
+  "name": "bugsense-ai-workspace",
+  "version": "1.0.0",
+  "description": "BugSense AI - Intelligent Error Explainer strictly using MongoDB",
+  "scripts": {
+    "start": "node server/server.js",
+    "server": "npm --prefix server run dev",
+    "client": "npm --prefix client run dev",
+    "build": "npm --prefix client run build",
+    "dev": "node dev-runner.js",
+    "seed": "node server/scripts/seed.js"
+  },
+  "type": "module"
+}
