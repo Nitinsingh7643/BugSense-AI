@@ -8,7 +8,8 @@
     "client": "npm --prefix client run dev",
     "build": "npm --prefix client run build",
     "dev": "node dev-runner.js",
-    "seed": "node server/scripts/seed.js"
+    "seed": "node server/scripts/seed.js",
+    "verify": "node server/scripts/verify-requirements.js"
   },
   "type": "module"
 }

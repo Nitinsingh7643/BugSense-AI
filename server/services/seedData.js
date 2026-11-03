@@ -1,4 +1,6 @@
 import { ErrorCase } from '../models/ErrorCase.js';
+import { Feedback } from '../models/Feedback.js';
+import { QueryHistory } from '../models/QueryHistory.js';
 import { generateErrorSignature } from './similarityService.js';
 
 export const seedErrorCases = [
@@ -243,12 +245,16 @@ export async function seedDatabase(force = false) {
     const count = await ErrorCase.countDocuments();
     if (count > 0 && !force) {
       console.log(`[Seed] Database already has ${count} error cases. Skipping seed.`);
-      return { count, seeded: false };
+      const fbCount = await Feedback.countDocuments();
+      const qhCount = await QueryHistory.countDocuments();
+      return { errorCases: count, feedback: fbCount, queryHistory: qhCount, seeded: false };
     }
 
     if (force) {
       await ErrorCase.deleteMany({});
-      console.log('[Seed] Cleared existing error cases for fresh seed.');
+      await Feedback.deleteMany({});
+      await QueryHistory.deleteMany({});
+      console.log('[Seed] Cleared existing collections for fresh seed.');
     }
 
     const casesWithSignatures = seedErrorCases.map(item => ({
@@ -256,9 +262,99 @@ export async function seedDatabase(force = false) {
       errorSignature: generateErrorSignature(item.errorMessage, item.language)
     }));
 
-    await ErrorCase.insertMany(casesWithSignatures);
-    console.log(`[Seed] Successfully seeded ${casesWithSignatures.length} verified error cases into MongoDB!`);
-    return { count: casesWithSignatures.length, seeded: true };
+    const insertedCases = await ErrorCase.insertMany(casesWithSignatures);
+    console.log(`[Seed] Successfully seeded ${insertedCases.length} verified error cases into MongoDB!`);
+
+    // Generate realistic student feedback entries linked via ObjectId
+    const sampleFeedback = [];
+    const studentComments = [
+      'The step-by-step breakdown resolved my bug instantly!',
+      'Great explanation of the root cause. Appreciated the defensive coding tip.',
+      'Saved me hours of frustration trying to debug my React re-render loop.',
+      'Clear fix with exact code diff. Very helpful!',
+      'Understood why off-by-one happens in Python slice indexing.',
+      'The explanation of NullPointerException dereference helped me pass my Java lab.'
+    ];
+
+    insertedCases.forEach((ec, idx) => {
+      // 2 feedback items per error case
+      sampleFeedback.push({
+        errorCaseId: ec._id,
+        resolvedIssue: true,
+        rating: 5,
+        studentComment: studentComments[idx % studentComments.length],
+        studentLevel: idx % 3 === 0 ? 'Beginner' : (idx % 3 === 1 ? 'Intermediate' : 'Advanced')
+      });
+      sampleFeedback.push({
+        errorCaseId: ec._id,
+        resolvedIssue: idx % 4 !== 0,
+        rating: idx % 4 === 0 ? 3 : 4,
+        studentComment: idx % 4 === 0 ? 'Fix worked after adapting variable names.' : 'Clear and concise solution.',
+        studentLevel: 'Beginner'
+      });
+    });
+
+    await Feedback.insertMany(sampleFeedback);
+    console.log(`[Seed] Seeded ${sampleFeedback.length} verified student reviews for $lookup relational joins.`);
+
+    // Seed realistic student QueryHistory entries
+    const sampleQueries = [
+      {
+        queryText: "TypeError: Cannot read properties of undefined (reading 'map')",
+        codeSnippet: "users.map(u => u.name)",
+        language: "javascript",
+        actionTaken: "used_similar_cache",
+        matchedErrorCaseId: insertedCases[0]._id,
+        similarityScore: 100,
+        resolved: true
+      },
+      {
+        queryText: "IndexError: list index out of range in Python loop",
+        codeSnippet: "items[len(items)]",
+        language: "python",
+        actionTaken: "used_similar_cache",
+        matchedErrorCaseId: insertedCases[1]._id,
+        similarityScore: 95,
+        resolved: true
+      },
+      {
+        queryText: "java.lang.NullPointerException: Cannot invoke String.length()",
+        codeSnippet: "name.length()",
+        language: "java",
+        actionTaken: "requested_ai_explanation",
+        matchedErrorCaseId: insertedCases[3]._id,
+        similarityScore: 90,
+        resolved: true
+      },
+      {
+        queryText: "Error: Too many re-renders. React limits number of renders",
+        codeSnippet: "<button onClick={setCount(1)}>Click</button>",
+        language: "javascript",
+        actionTaken: "used_similar_cache",
+        matchedErrorCaseId: insertedCases[5]._id,
+        similarityScore: 100,
+        resolved: true
+      },
+      {
+        queryText: "Segmentation fault (core dumped) in pointer dereference",
+        codeSnippet: "*ptr = 10;",
+        language: "cpp",
+        actionTaken: "browsed_knowledge_base",
+        matchedErrorCaseId: insertedCases[4]._id,
+        similarityScore: 88,
+        resolved: true
+      }
+    ];
+
+    await QueryHistory.insertMany(sampleQueries);
+    console.log(`[Seed] Seeded ${sampleQueries.length} query history logs.`);
+
+    return {
+      errorCases: insertedCases.length,
+      feedback: sampleFeedback.length,
+      queryHistory: sampleQueries.length,
+      seeded: true
+    };
   } catch (err) {
     console.error('[Seed] Error seeding database:', err.message);
     throw err;

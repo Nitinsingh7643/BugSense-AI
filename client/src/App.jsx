@@ -30,15 +30,27 @@ import {
   Cpu,
   Edit3,
   Plus,
-  Circle
+  Circle,
+  Play,
+  ChevronRight,
+  Lock,
+  Sun,
+  Moon,
+  LogOut
 } from 'lucide-react';
 import './App.css';
+import LandingPage from './LandingPage.jsx';
 
 const getApiBase = () => {
   const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE;
-  if (!envUrl) return 'http://localhost:5000/api';
-  const clean = envUrl.trim().replace(/\/+$/, '');
-  return clean.endsWith('/api') ? clean : `${clean}/api`;
+  if (envUrl) {
+    const clean = envUrl.trim().replace(/\/+$/, '');
+    return clean.endsWith('/api') ? clean : `${clean}/api`;
+  }
+  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    return '/api';
+  }
+  return 'http://localhost:5000/api';
 };
 
 const API_BASE = getApiBase();
@@ -89,8 +101,45 @@ const PRESETS = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('explainer'); // 'explainer' | 'kb' | 'history' | 'analytics'
+  const [activeTab, setActiveTab] = useState('landing'); // 'landing' | 'explainer' | 'kb' | 'history' | 'analytics'
   const [mongoStatus, setMongoStatus] = useState({ connected: false, databaseName: 'bugsense_ai' });
+  
+  // User Authentication State
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('bugsense_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [authMode, setAuthMode] = useState('login'); // 'login' | 'register'
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authName, setAuthName] = useState('');
+  const [authRole, setAuthRole] = useState('Developer');
+  const [authLang, setAuthLang] = useState('javascript');
+  const [authError, setAuthError] = useState('');
+  const [authSuccess, setAuthSuccess] = useState('');
+  const [isSubmittingAuth, setIsSubmittingAuth] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
+  // Dark & Light Mode Theme State
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem('bugsense_theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+    return (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.style.colorScheme = theme;
+    localStorage.setItem('bugsense_theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
+  };
   
   // Explainer Form State
   const [language, setLanguage] = useState('auto');
@@ -143,6 +192,36 @@ export default function App() {
   const [formPreventionTips, setFormPreventionTips] = useState('');
   const [formTags, setFormTags] = useState('');
   const [isSavingCase, setIsSavingCase] = useState(false);
+  const [formValidationErrors, setFormValidationErrors] = useState(null);
+
+  // Architecture & Requirements Specs Modal
+  const [showReqModal, setShowReqModal] = useState(false);
+
+  // MongoDB Aggregation Pipelines Inspector State
+  const [pipelinesList, setPipelinesList] = useState([]);
+  const [selectedPipelineId, setSelectedPipelineId] = useState('languageStats');
+  const [activePipelineData, setActivePipelineData] = useState(null);
+  const [isRunningPipeline, setIsRunningPipeline] = useState(false);
+  const [pipelineViewerTab, setPipelineViewerTab] = useState('output'); // 'output' | 'definition'
+
+  const runPipeline = async (id) => {
+    const pipeId = id || selectedPipelineId;
+    setSelectedPipelineId(pipeId);
+    setIsRunningPipeline(true);
+    try {
+      const res = await fetch(`${API_BASE}/analytics/pipelines/run/${pipeId}`, {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (data.success) {
+        setActivePipelineData(data);
+      }
+    } catch (err) {
+      console.error('Run pipeline failed:', err);
+    } finally {
+      setIsRunningPipeline(false);
+    }
+  };
 
   const checkMongoStatus = useCallback(async () => {
     try {
@@ -191,13 +270,23 @@ export default function App() {
 
   const loadAnalytics = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/analytics`);
-      const data = await res.json();
-      if (data?.stats) {
-        setAnalyticsData(data.stats);
+      const [statsRes, pipeRes] = await Promise.all([
+        fetch(`${API_BASE}/analytics`),
+        fetch(`${API_BASE}/analytics/pipelines`)
+      ]);
+      const statsData = await statsRes.json();
+      if (statsData?.stats) {
+        setAnalyticsData(statsData.stats);
+      }
+      const pipeData = await pipeRes.json();
+      if (pipeData?.pipelines) {
+        setPipelinesList(pipeData.pipelines);
+        if (pipeData.pipelines.length > 0) {
+          runPipeline(pipeData.pipelines[0].id);
+        }
       }
     } catch (err) {
-      console.error('Failed to load analytics:', err);
+      console.error('Failed to load analytics & pipelines:', err);
     }
   }, []);
 
@@ -253,10 +342,14 @@ export default function App() {
     setIsAnalyzing(true);
     setFeedbackSent(false);
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
     try {
       const res = await fetch(`${API_BASE}/errors/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           errorText,
           codeSnippet,
@@ -265,6 +358,7 @@ export default function App() {
           chosenSimilarId
         })
       });
+      clearTimeout(timeoutId);
 
       const data = await res.json();
       if (data.success && data.errorCase) {
@@ -319,6 +413,16 @@ export default function App() {
     setFeedbackSent(false);
   };
 
+  // Clear Workbench
+  const handleClearAll = () => {
+    setErrorText('');
+    setCodeSnippet('');
+    setSimilarMatches([]);
+    setActiveSolution(null);
+    setSolutionSource(null);
+    setFeedbackSent(false);
+  };
+
   // Quick Paste
   const handlePasteClipboard = async () => {
     try {
@@ -336,6 +440,148 @@ export default function App() {
     navigator.clipboard.writeText(text);
     setCopiedDiff(true);
     setTimeout(() => setCopiedDiff(false), 2000);
+  };
+
+  // Auth Handlers (Sign In, Register, Demo, Logout)
+  const handleLogin = async (e) => {
+    e?.preventDefault();
+    setIsSubmittingAuth(true);
+    setAuthError('');
+    setAuthSuccess('');
+    try {
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, password: authPassword })
+      });
+      const data = await res.json();
+      if (data.success && data.user) {
+        setCurrentUser(data.user);
+        localStorage.setItem('bugsense_user', JSON.stringify(data.user));
+        setAuthSuccess(`Welcome back, ${data.user.name}! Opening workspace...`);
+        setTimeout(() => {
+          setActiveTab('explainer');
+          setAuthSuccess('');
+        }, 600);
+      } else {
+        setAuthError(data.error || 'Failed to sign in. Please verify your credentials.');
+      }
+    } catch (err) {
+      console.warn('Backend offline, using guest session:', err);
+      const fallback = {
+        id: 'local-' + Date.now().toString(36),
+        name: authEmail.split('@')[0] || 'Developer',
+        email: authEmail,
+        role: 'Developer',
+        primaryLanguage: 'javascript'
+      };
+      setCurrentUser(fallback);
+      localStorage.setItem('bugsense_user', JSON.stringify(fallback));
+      setActiveTab('explainer');
+    } finally {
+      setIsSubmittingAuth(false);
+    }
+  };
+
+  const handleRegister = async (e) => {
+    e?.preventDefault();
+    setIsSubmittingAuth(true);
+    setAuthError('');
+    setAuthSuccess('');
+    try {
+      const res = await fetch(`${API_BASE}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: authName,
+          email: authEmail,
+          password: authPassword,
+          role: authRole,
+          primaryLanguage: authLang
+        })
+      });
+      const data = await res.json();
+      if (data.success && data.user) {
+        setCurrentUser(data.user);
+        localStorage.setItem('bugsense_user', JSON.stringify(data.user));
+        setAuthSuccess('Account registered successfully! Launching workspace...');
+        setTimeout(() => {
+          setActiveTab('explainer');
+          setAuthSuccess('');
+        }, 600);
+      } else {
+        setAuthError(data.error || 'Registration failed. Please check form details.');
+      }
+    } catch (err) {
+      console.warn('Backend offline, using guest session:', err);
+      const fallback = {
+        id: 'local-' + Date.now().toString(36),
+        name: authName || 'Developer',
+        email: authEmail,
+        role: authRole,
+        primaryLanguage: authLang
+      };
+      setCurrentUser(fallback);
+      localStorage.setItem('bugsense_user', JSON.stringify(fallback));
+      setActiveTab('explainer');
+    } finally {
+      setIsSubmittingAuth(false);
+    }
+  };
+
+  const handleDemoLogin = async () => {
+    setIsSubmittingAuth(true);
+    try {
+      const res = await fetch(`${API_BASE}/auth/demo`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success && data.user) {
+        setCurrentUser(data.user);
+        localStorage.setItem('bugsense_user', JSON.stringify(data.user));
+        setActiveTab('explainer');
+        return;
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsSubmittingAuth(false);
+    }
+    const guestUser = {
+      id: 'guest-' + Date.now().toString(36),
+      name: 'Guest Developer',
+      email: 'demo@bugsense.ai',
+      role: 'Developer',
+      primaryLanguage: 'python'
+    };
+    setCurrentUser(guestUser);
+    localStorage.setItem('bugsense_user', JSON.stringify(guestUser));
+    setActiveTab('explainer');
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem('bugsense_user');
+    setActiveTab('landing');
+  };
+
+  /**
+   * navigateToTab — guards all workspace tabs behind authentication.
+   * If the user is logged in, switches immediately.
+   * Otherwise, redirects to the landing page and scrolls to the auth portal.
+   */
+  const GATED_TABS = ['explainer', 'kb', 'history', 'analytics'];
+  const navigateToTab = (tab) => {
+    if (!GATED_TABS.includes(tab) || currentUser) {
+      setActiveTab(tab);
+      return;
+    }
+    // Not authenticated — show landing and prompt sign-in
+    setAuthMode('login');
+    setAuthError('Please sign in or use Instant Demo to access the workspace.');
+    setActiveTab('landing');
+    setTimeout(() => {
+      const el = document.getElementById('auth-portal');
+      if (el) el.scrollIntoView({ behavior: 'smooth' });
+    }, 120);
   };
 
   // Re-seed Database
@@ -369,10 +615,12 @@ export default function App() {
     setFormFixedCode('');
     setFormPreventionTips('');
     setFormTags('javascript, bugfix');
+    setFormValidationErrors(null);
     setShowAddEditModal(true);
   };
 
-  const handleOpenEditModal = (item) => {
+  const handleOpenEditModal = (item, e) => {
+    e?.stopPropagation();
     setEditingItem(item);
     setFormErrorMessage(item.errorMessage || '');
     setFormLanguage(item.language || 'javascript');
@@ -384,17 +632,28 @@ export default function App() {
     setFormFixedCode(item.suggestedFix?.fixedCode || '');
     setFormPreventionTips(Array.isArray(item.preventionTips) ? item.preventionTips.join('\n') : '');
     setFormTags(Array.isArray(item.tags) ? item.tags.join(', ') : '');
+    setFormValidationErrors(null);
     setShowAddEditModal(true);
   };
 
   const handleSaveErrorCase = async (e) => {
-    e.preventDefault();
-    if (!formErrorMessage.trim()) {
-      alert('Error message / title is required.');
-      return;
+    e?.preventDefault();
+    setFormValidationErrors(null);
+
+    // Client-side schema validation checks
+    const localErrors = [];
+    if (!formErrorMessage.trim() || formErrorMessage.trim().length < 3) {
+      localErrors.push('Error message is required and must be at least 3 characters.');
     }
-    if (!formExplanation.trim()) {
-      alert('Explanation is required.');
+    if (!formExplanation.trim() || formExplanation.trim().length < 10) {
+      localErrors.push('Root cause explanation is required and must be at least 10 characters.');
+    }
+    if (!formFixedCode.trim()) {
+      localErrors.push('Verified fix solution code is required.');
+    }
+
+    if (localErrors.length > 0) {
+      setFormValidationErrors(localErrors);
       return;
     }
 
@@ -424,7 +683,7 @@ export default function App() {
           body: JSON.stringify(payload)
         });
         const data = await res.json();
-        if (data.success && data.errorCase) {
+        if (res.ok && data.success && data.errorCase) {
           setKbItems(prev => prev.map(item => item._id === editingItem._id ? data.errorCase : item));
           if (selectedKbModalItem?._id === editingItem._id) {
             setSelectedKbModalItem(data.errorCase);
@@ -435,7 +694,10 @@ export default function App() {
           setShowAddEditModal(false);
           setEditingItem(null);
         } else {
-          alert(data.error || 'Failed to update error case in MongoDB.');
+          const errs = data.validationErrors?.map(v => `${v.field}: ${v.message}`)
+            || data.errors?.map(v => `${v.field}: ${v.message}`)
+            || [data.message || data.error || 'Failed to update error case in MongoDB.'];
+          setFormValidationErrors(errs);
         }
       } else {
         // CREATE (POST)
@@ -445,18 +707,21 @@ export default function App() {
           body: JSON.stringify(payload)
         });
         const data = await res.json();
-        if (data.success && data.errorCase) {
+        if (res.ok && data.success && data.errorCase) {
           setKbItems(prev => [data.errorCase, ...prev]);
           setShowAddEditModal(false);
           checkMongoStatus();
           loadAnalytics();
         } else {
-          alert(data.error || 'Failed to create error case in MongoDB.');
+          const errs = data.validationErrors?.map(v => `${v.field}: ${v.message}`)
+            || data.errors?.map(v => `${v.field}: ${v.message}`)
+            || [data.message || data.error || 'Failed to create error case in MongoDB.'];
+          setFormValidationErrors(errs);
         }
       }
     } catch (err) {
       console.error('Save error case failed:', err);
-      alert('Failed to connect to server: ' + err.message);
+      setFormValidationErrors(['Failed to connect to server: ' + err.message]);
     } finally {
       setIsSavingCase(false);
     }
@@ -528,75 +793,160 @@ export default function App() {
 
   return (
     <div className="app-container">
-      {/* Modern Floating Header */}
+      {/* ── Modern Premium Header ───────────────────────────────────── */}
       <header className="app-header">
-        <div className="brand-wrapper" onClick={() => setActiveTab('explainer')}>
+
+        {/* Brand */}
+        <div className="brand-wrapper" onClick={() => setActiveTab('landing')}>
           <div className="brand-icon">
-            <Bug size={24} />
+            <Bug size={18} />
           </div>
-          <div>
-            <div className="brand-title">
-              BugSense AI
-              <span className="brand-badge">PRO v1.2</span>
-            </div>
-            <div className="brand-subtitle">
-              <Cpu size={12} color="var(--accent-cyan)" />
-              Hybrid AI &bull; MongoDB Invariant Search
-            </div>
+          <div className="brand-title">
+            BugSense
+            <span className="brand-badge">PRO</span>
           </div>
         </div>
 
         {/* Navigation Tabs Dock */}
         <nav className="nav-tabs">
           <button
-            className={`nav-tab-btn ${activeTab === 'explainer' ? 'active' : ''}`}
-            onClick={() => setActiveTab('explainer')}
+            className={`nav-tab-btn ${activeTab === 'landing' ? 'active' : ''}`}
+            onClick={() => setActiveTab('landing')}
           >
-            <Sparkles size={16} />
-            <span>AI Explainer</span>
+            <Layers size={13} /><span>Overview</span>
+          </button>
+          <button
+            className={`nav-tab-btn ${activeTab === 'explainer' ? 'active' : ''}`}
+            onClick={() => navigateToTab('explainer')}
+            title={!currentUser ? 'Sign in to access' : undefined}
+          >
+            <Sparkles size={13} /><span>AI Explainer</span>
           </button>
           <button
             className={`nav-tab-btn ${activeTab === 'kb' ? 'active' : ''}`}
-            onClick={() => setActiveTab('kb')}
+            onClick={() => navigateToTab('kb')}
+            title={!currentUser ? 'Sign in to access' : undefined}
           >
-            <Database size={16} />
-            <span>Solved Database</span>
+            <Database size={13} /><span>Solved DB</span>
           </button>
           <button
             className={`nav-tab-btn ${activeTab === 'history' ? 'active' : ''}`}
-            onClick={() => setActiveTab('history')}
+            onClick={() => navigateToTab('history')}
+            title={!currentUser ? 'Sign in to access' : undefined}
           >
-            <History size={16} />
-            <span>History</span>
+            <History size={13} /><span>History</span>
           </button>
           <button
             className={`nav-tab-btn ${activeTab === 'analytics' ? 'active' : ''}`}
-            onClick={() => setActiveTab('analytics')}
+            onClick={() => navigateToTab('analytics')}
+            title={!currentUser ? 'Sign in to access' : undefined}
           >
-            <BarChart3 size={16} />
-            <span>Analytics</span>
+            <BarChart3 size={13} /><span>Analytics</span>
           </button>
         </nav>
 
-        {/* Header Right Actions */}
+        {/* Right Toolbar Actions */}
         <div className="header-actions">
-          <div className={`mongo-status-pill ${mongoStatus.connected ? '' : 'disconnected'}`}>
-            <span className={`pulse-dot ${mongoStatus.connected ? '' : 'disconnected'}`}></span>
-            <span>{mongoStatus.connected ? `MongoDB: ${mongoStatus.databaseName}` : 'MongoDB Offline'}</span>
-          </div>
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={() => setShowSettingsModal(true)}
-            title="MongoDB Stats & AI Settings"
+
+          {/* MongoDB Status Pill */}
+          <div
+            className={`mongo-status-pill ${mongoStatus.connected ? '' : 'disconnected'}`}
+            title={mongoStatus.connected ? 'MongoDB Atlas: Connected' : 'MongoDB: Offline'}
           >
-            <Settings size={16} />
-            <span>Settings</span>
-          </button>
+            <span className={`pulse-dot ${mongoStatus.connected ? '' : 'disconnected'}`}></span>
+            <span className="mongo-status-label">{mongoStatus.connected ? 'Online' : 'Offline'}</span>
+          </div>
+
+          <div className="header-divider" />
+
+          {/* Quick Actions Icon Dock */}
+          <div className="header-icon-group">
+            <button
+              className="header-icon-btn"
+              onClick={toggleTheme}
+              title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              aria-label="Toggle theme"
+            >
+              {theme === 'dark' ? <Sun size={15} color="#f59e0b" /> : <Moon size={15} color="#6366f1" />}
+            </button>
+            <button
+              className="header-icon-btn"
+              onClick={() => setShowReqModal(true)}
+              title="Architecture & Project Specs"
+            >
+              <ShieldCheck size={15} color="#818cf8" />
+            </button>
+            <button
+              className="header-icon-btn"
+              onClick={() => setShowSettingsModal(true)}
+              title="Settings & Diagnostics"
+            >
+              <Settings size={15} />
+            </button>
+          </div>
+
+          <div className="header-divider" />
+
+          {/* User Profile or Sign-In */}
+          {currentUser ? (
+            <div className="user-profile-badge" title={`Signed in as ${currentUser.name} (${currentUser.email})`}>
+              <div className="user-avatar-circle">
+                {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : 'U'}
+              </div>
+              <span className="user-name-text">
+                {currentUser.name ? currentUser.name.split(' ')[0] : 'User'}
+              </span>
+              <button className="btn-logout-mini" title="Sign Out" onClick={handleLogout}>
+                <LogOut size={12} />
+              </button>
+            </div>
+          ) : (
+            <button
+              className="btn btn-primary btn-signin-header"
+              onClick={() => {
+                setActiveTab('landing');
+                setTimeout(() => document.getElementById('auth-portal')?.scrollIntoView({ behavior: 'smooth' }), 100);
+              }}
+            >
+              <Lock size={12} /> Sign In
+            </button>
+          )}
+
         </div>
       </header>
 
       {/* Main Workspace */}
       <main className="main-wrapper">
+        {/* TAB 0: MODERN LANDING PAGE */}
+        {activeTab === 'landing' && (
+          <LandingPage
+            onLaunchExplainer={() => navigateToTab('explainer')}
+            onBrowseDatabase={() => navigateToTab('kb')}
+            currentUser={currentUser}
+            onLogout={handleLogout}
+            authMode={authMode}
+            setAuthMode={setAuthMode}
+            authEmail={authEmail}
+            setAuthEmail={setAuthEmail}
+            authPassword={authPassword}
+            setAuthPassword={setAuthPassword}
+            authName={authName}
+            setAuthName={setAuthName}
+            authRole={authRole}
+            setAuthRole={setAuthRole}
+            authLang={authLang}
+            setAuthLang={setAuthLang}
+            authError={authError}
+            authSuccess={authSuccess}
+            isSubmittingAuth={isSubmittingAuth}
+            showPassword={showPassword}
+            setShowPassword={setShowPassword}
+            handleLogin={handleLogin}
+            handleRegister={handleRegister}
+            handleDemoLogin={handleDemoLogin}
+            mongoStatus={mongoStatus}
+          />
+        )}
         {/* Quick Starters & Presets Bar */}
         {activeTab === 'explainer' && (
           <div className="presets-banner">
@@ -636,6 +986,15 @@ export default function App() {
                   >
                     <ClipboardPaste size={14} />
                     <span>Paste</span>
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={handleClearAll}
+                    title="Clear input fields and analysis"
+                    style={{ gap: '5px', borderColor: 'rgba(244,63,94,0.3)', color: '#fda4af' }}
+                  >
+                    <Trash2 size={13} />
+                    <span>Clear</span>
                   </button>
                   <select
                     className="select-field"
@@ -728,20 +1087,15 @@ export default function App() {
                   )}
                 </button>
 
-                {(errorText || codeSnippet) && (
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => {
-                      setErrorText('');
-                      setCodeSnippet('');
-                      setSimilarMatches([]);
-                      setActiveSolution(null);
-                    }}
-                    title="Clear editor fields"
-                  >
-                    Clear
-                  </button>
-                )}
+                <button
+                  className="btn btn-secondary"
+                  onClick={handleClearAll}
+                  title="Clear inputs and diagnosis results"
+                  style={{ gap: '6px', padding: '12px 18px', fontWeight: 600, borderColor: 'rgba(244,63,94,0.35)', color: '#fda4af' }}
+                >
+                  <Trash2 size={16} />
+                  <span>Clear</span>
+                </button>
               </div>
 
               {/* Similar Solved Matches Drawer */}
@@ -1035,9 +1389,15 @@ export default function App() {
             <div className="kb-header-row">
               <div>
                 <h2>Solved Errors Knowledge Base</h2>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem' }}>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem', marginBottom: '8px' }}>
                   Browse verified, community-tested error solutions indexed in MongoDB.
                 </p>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  <span className="crud-pill crud-create" title="POST /api/errors">[C] CREATE</span>
+                  <span className="crud-pill crud-read" title="GET /api/errors">[R] READ</span>
+                  <span className="crud-pill crud-update" title="PUT /api/errors/:id">[U] UPDATE</span>
+                  <span className="crud-pill crud-delete" title="DELETE /api/errors/:id">[D] DELETE</span>
+                </div>
               </div>
 
               <div className="kb-filters">
@@ -1095,6 +1455,41 @@ export default function App() {
             {isLoadingKb ? (
               <div style={{ textAlign: 'center', padding: '70px' }}>
                 <RefreshCw size={36} className="spinner" color="var(--primary)" />
+              </div>
+            ) : kbItems.length === 0 ? (
+              <div className="kb-empty-state-card">
+                <div className="kb-empty-icon">
+                  <Database size={32} />
+                </div>
+                <h3 className="kb-empty-title">
+                  {!mongoStatus.connected ? 'MongoDB is Offline or Unreachable' : 'No Solved Errors Found'}
+                </h3>
+                <p className="kb-empty-desc">
+                  {!mongoStatus.connected
+                    ? 'The backend server or MongoDB Atlas is currently disconnected. Ensure the backend is running and connected to MongoDB, or click below to retry and seed verified cases.'
+                    : `No error cases match your current filter (Language: "${kbFilterLang}", Search: "${kbSearch || 'None'}"). Reset your filters or seed the database.`}
+                </p>
+                <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                  {(!mongoStatus.connected || kbFilterLang !== 'all' || kbSearch) && (
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        setKbFilterLang('all');
+                        setKbSearch('');
+                        loadKbItems();
+                        checkMongoStatus();
+                      }}
+                    >
+                      Reset Filters & Retry
+                    </button>
+                  )}
+                  <button className="btn btn-primary" onClick={handleReSeed}>
+                    Seed Verified Error Cases
+                  </button>
+                  <button className="btn btn-secondary" onClick={handleOpenAddModal}>
+                    + Create New Case
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="kb-grid">
@@ -1362,6 +1757,147 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {/* 1. Unwound Tags Cloud Aggregation ($unwind + $group) */}
+            {analyticsData?.topTags && analyticsData.topTags.length > 0 && (
+              <div className="glass-panel" style={{ padding: '20px', marginTop: '24px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Layers size={18} color="var(--primary)" />
+                    <h3 style={{ fontSize: '1rem', margin: 0 }}>Top Unwound Tags</h3>
+                    <span className="stage-badge">$unwind + $group + $sort</span>
+                  </div>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Aggregated live from ErrorCase.tags array</span>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                  {analyticsData.topTags.map(tag => (
+                    <span
+                      key={tag._id}
+                      className="badge"
+                      style={{
+                        background: 'rgba(99, 102, 241, 0.14)',
+                        color: '#cbd5e1',
+                        border: '1px solid rgba(99, 102, 241, 0.3)',
+                        padding: '6px 12px',
+                        fontSize: '0.82rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}
+                    >
+                      <span>#{tag._id}</span>
+                      <strong style={{ color: '#818cf8' }}>({tag.count})</strong>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 2. Interactive MongoDB Aggregation Pipelines Inspector */}
+            <div className="pipeline-inspector">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <Zap size={22} color="#818cf8" />
+                    <h3 style={{ fontSize: '1.18rem', margin: 0 }}>Interactive MongoDB Aggregation Pipeline Inspector</h3>
+                  </div>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '4px', marginBottom: 0 }}>
+                    Select and execute real-time multi-stage MongoDB aggregations directly on Atlas collections.
+                  </p>
+                </div>
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={isRunningPipeline}
+                  onClick={() => runPipeline(selectedPipelineId)}
+                  style={{ gap: '6px' }}
+                >
+                  {isRunningPipeline ? (
+                    <><RefreshCw size={14} className="spinner" /> Executing...</>
+                  ) : (
+                    <><Play size={14} /> Run Live Pipeline</>
+                  )}
+                </button>
+              </div>
+
+              {/* Pipeline Selector Tabs */}
+              <div className="pipeline-tab-group">
+                {pipelinesList.map(pipe => (
+                  <button
+                    key={pipe.id}
+                    className={`pipeline-tab-btn ${selectedPipelineId === pipe.id ? 'active' : ''}`}
+                    onClick={() => runPipeline(pipe.id)}
+                  >
+                    <span>{pipe.name}</span>
+                  </button>
+                ))}
+              </div>
+
+              {/* Active Pipeline Card */}
+              {activePipelineData && (
+                <div style={{ background: 'rgba(0, 0, 0, 0.3)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '18px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: '0.98rem', color: '#fff' }}>
+                        {activePipelineData.name}
+                      </div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        Target Collection: <strong style={{ color: '#38bdf8' }}>{activePipelineData.collection}</strong>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {activePipelineData.durationMs !== undefined && (
+                        <span className="badge badge-emerald" style={{ fontSize: '0.78rem' }}>
+                          ⚡ {activePipelineData.durationMs} ms
+                        </span>
+                      )}
+                      <span className="badge badge-indigo" style={{ fontSize: '0.78rem' }}>
+                        {activePipelineData.resultCount ?? (Array.isArray(activePipelineData.result) ? activePipelineData.result.length : 1)} documents returned
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Stages Used */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Pipeline Stages:</span>
+                    {activePipelineData.stagesUsed?.map((stg, i) => (
+                      <span key={i} className="stage-badge">{stg}</span>
+                    ))}
+                  </div>
+
+                  <p style={{ fontSize: '0.84rem', color: '#94a3b8', lineHeight: 1.5, marginBottom: '16px' }}>
+                    {activePipelineData.description}
+                  </p>
+
+                  {/* Toggle Live Output vs Definition */}
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                    <button
+                      className={`btn btn-sm ${pipelineViewerTab === 'output' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setPipelineViewerTab('output')}
+                      style={{ padding: '4px 12px', fontSize: '0.78rem' }}
+                    >
+                      Live MongoDB Output (JSON)
+                    </button>
+                    <button
+                      className={`btn btn-sm ${pipelineViewerTab === 'definition' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setPipelineViewerTab('definition')}
+                      style={{ padding: '4px 12px', fontSize: '0.78rem' }}
+                    >
+                      Pipeline Query Definition (Stages)
+                    </button>
+                  </div>
+
+                  {pipelineViewerTab === 'output' ? (
+                    <pre className="code-preview-box">
+                      {JSON.stringify(activePipelineData.result, null, 2)}
+                    </pre>
+                  ) : (
+                    <pre className="code-preview-box">
+                      {JSON.stringify(activePipelineData.pipelineDefinition, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </main>
@@ -1391,6 +1927,32 @@ export default function App() {
                   <div><strong>Feedback Docs:</strong> {mongoStatus.collections?.feedback ?? 0}</div>
                   <div><strong>Indexes:</strong> {mongoStatus.indexesCount ?? 7} Loaded</div>
                   <div><strong>Storage Size:</strong> {mongoStatus.storageSize ?? '32 KB'}</div>
+                </div>
+              </div>
+
+              {/* Appearance / Theme */}
+              <div>
+                <label className="input-label" style={{ marginBottom: '8px' }}>
+                  {theme === 'dark' ? <Moon size={15} color="var(--primary)" /> : <Sun size={15} color="#f59e0b" />}
+                  Theme &amp; Appearance
+                </label>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${theme === 'dark' ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setTheme('dark')}
+                    style={{ flex: 1, gap: 8 }}
+                  >
+                    <Moon size={14} /> Dark Mode
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${theme === 'light' ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setTheme('light')}
+                    style={{ flex: 1, gap: 8 }}
+                  >
+                    <Sun size={14} /> Light Mode
+                  </button>
                 </div>
               </div>
 
@@ -1504,6 +2066,9 @@ export default function App() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <Database size={20} color="var(--primary)" />
                 <h2>{editingItem ? 'Edit Solved Error Case' : 'Add New Solved Error Case'}</h2>
+                <span className={`crud-pill ${editingItem ? 'crud-update' : 'crud-create'}`}>
+                  {editingItem ? 'UPDATE (PUT)' : 'CREATE (POST)'}
+                </span>
               </div>
               <button className="btn btn-secondary btn-sm" onClick={() => setShowAddEditModal(false)}>
                 <X size={16} />
@@ -1512,6 +2077,19 @@ export default function App() {
 
             <form onSubmit={handleSaveErrorCase}>
               <div className="modal-body">
+                {/* Schema & Input Validation Error Alert */}
+                {formValidationErrors && formValidationErrors.length > 0 && (
+                  <div className="validation-error-box">
+                    <div style={{ fontWeight: 700, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <AlertTriangle size={16} /> Schema Validation Alert:
+                    </div>
+                    <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: 1.5 }}>
+                      {formValidationErrors.map((msg, i) => (
+                        <li key={i}>{msg}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 {/* Error Message */}
                 <div>
                   <label className="input-label" style={{ marginBottom: '6px' }}>
@@ -1690,6 +2268,210 @@ export default function App() {
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 4: ARCHITECTURE & REQUIREMENTS SPECS (VALIDATION, CRUD, AGGREGATION) */}
+      {showReqModal && (
+        <div className="modal-overlay" onClick={() => setShowReqModal(false)}>
+          <div className="modal-content" style={{ maxWidth: '840px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <ShieldCheck size={22} color="#818cf8" />
+                <div>
+                  <h2 style={{ margin: 0, fontSize: '1.2rem' }}>Project Architecture & Technical Specifications</h2>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Core Pillars: MongoDB Schema Validation &bull; Full CRUD Operations &bull; Aggregation Pipelines
+                  </div>
+                </div>
+              </div>
+              <button className="btn btn-secondary btn-sm" onClick={() => setShowReqModal(false)}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ gap: '22px' }}>
+              {/* PILLAR 1: VALIDATION */}
+              <div className="glass-panel" style={{ padding: '20px', background: 'rgba(99, 102, 241, 0.05)', border: '1px solid rgba(99, 102, 241, 0.3)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <ShieldCheck size={20} color="#818cf8" />
+                    <h3 style={{ margin: 0, fontSize: '1.05rem', color: '#fff' }}>1. Validation System</h3>
+                  </div>
+                  <span className="badge badge-indigo">Multi-Layered Enforcement</span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', fontSize: '0.82rem' }}>
+                  <div style={{ background: 'rgba(0,0,0,0.25)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                    <strong style={{ color: '#a5b4fc', display: 'block', marginBottom: '6px' }}>Mongoose Schema Validation:</strong>
+                    <ul style={{ margin: 0, paddingLeft: '16px', lineHeight: 1.6, color: '#cbd5e1' }}>
+                      <li><code>errorMessage</code>: Required, minlength 3, maxlength 500</li>
+                      <li><code>language</code>: Required enum whitelist (15 languages)</li>
+                      <li><code>severity</code>: Enum (Critical, High, Medium, Low)</li>
+                      <li><code>explanation</code>: Required, minlength 10</li>
+                      <li><code>suggestedFix.fixedCode</code>: Required non-empty</li>
+                      <li><code>tags</code>: Array validator (non-empty strings &le; 40 chars)</li>
+                      <li><code>rating</code>: Integer bounds [1, 5] on Feedback</li>
+                      <li><code>studentLevel</code>: Enum (Beginner, Intermediate, Advanced)</li>
+                    </ul>
+                  </div>
+                  <div style={{ background: 'rgba(0,0,0,0.25)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                    <strong style={{ color: '#38bdf8', display: 'block', marginBottom: '6px' }}>API & Middleware Validation:</strong>
+                    <ul style={{ margin: 0, paddingLeft: '16px', lineHeight: 1.6, color: '#cbd5e1' }}>
+                      <li><code>validateErrorCasePayload()</code> Express middleware checks input types</li>
+                      <li><code>validateFeedbackPayload()</code> validates ratings and levels</li>
+                      <li><code>validateObjectId()</code> enforces valid 24-character hexadecimal MongoDB ObjectIds</li>
+                      <li><code>errorHandler.js</code> intercepts Mongoose <code>ValidationError</code> & <code>CastError</code> to return structured 400 Bad Request maps</li>
+                      <li>Client-side live input validation with inline warning alerts</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              {/* PILLAR 2: CRUD OPERATIONS */}
+              <div className="glass-panel" style={{ padding: '20px', background: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Database size={20} color="#34d399" />
+                    <h3 style={{ margin: 0, fontSize: '1.05rem', color: '#fff' }}>2. CRUD Operations (Create, Read, Update, Delete)</h3>
+                  </div>
+                  <span className="badge badge-emerald">100% Complete</span>
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', textAlign: 'left' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
+                        <th style={{ padding: '6px 8px' }}>Operation</th>
+                        <th style={{ padding: '6px 8px' }}>Method</th>
+                        <th style={{ padding: '6px 8px' }}>Endpoint</th>
+                        <th style={{ padding: '6px 8px' }}>Collection</th>
+                        <th style={{ padding: '6px 8px' }}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody style={{ color: '#e2e8f0', lineHeight: 1.6 }}>
+                      <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={{ padding: '6px 8px' }}><span className="crud-pill crud-create">CREATE</span></td>
+                        <td style={{ padding: '6px 8px' }}><code>POST</code></td>
+                        <td style={{ padding: '6px 8px' }}><code>/api/errors</code></td>
+                        <td style={{ padding: '6px 8px' }}>ErrorCase</td>
+                        <td style={{ padding: '6px 8px' }}>Manual solution creation with schema validation</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={{ padding: '6px 8px' }}><span className="crud-pill crud-create">CREATE</span></td>
+                        <td style={{ padding: '6px 8px' }}><code>POST</code></td>
+                        <td style={{ padding: '6px 8px' }}><code>/api/errors/analyze</code></td>
+                        <td style={{ padding: '6px 8px' }}>ErrorCase</td>
+                        <td style={{ padding: '6px 8px' }}>AI / Heuristic error diagnostic & auto-persistence</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={{ padding: '6px 8px' }}><span className="crud-pill crud-create">CREATE</span></td>
+                        <td style={{ padding: '6px 8px' }}><code>POST</code></td>
+                        <td style={{ padding: '6px 8px' }}><code>/api/errors/:id/feedback</code></td>
+                        <td style={{ padding: '6px 8px' }}>Feedback</td>
+                        <td style={{ padding: '6px 8px' }}>Record star ratings linked by ObjectId</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={{ padding: '6px 8px' }}><span className="crud-pill crud-read">READ</span></td>
+                        <td style={{ padding: '6px 8px' }}><code>GET</code></td>
+                        <td style={{ padding: '6px 8px' }}><code>/api/errors</code></td>
+                        <td style={{ padding: '6px 8px' }}>ErrorCase</td>
+                        <td style={{ padding: '6px 8px' }}>Query, pagination, language filter, regex search</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={{ padding: '6px 8px' }}><span className="crud-pill crud-read">READ</span></td>
+                        <td style={{ padding: '6px 8px' }}><code>GET</code></td>
+                        <td style={{ padding: '6px 8px' }}><code>/api/errors/:id</code></td>
+                        <td style={{ padding: '6px 8px' }}>ErrorCase</td>
+                        <td style={{ padding: '6px 8px' }}>Fetch single error case & track query frequency</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={{ padding: '6px 8px' }}><span className="crud-pill crud-read">READ</span></td>
+                        <td style={{ padding: '6px 8px' }}><code>GET</code></td>
+                        <td style={{ padding: '6px 8px' }}><code>/api/history</code></td>
+                        <td style={{ padding: '6px 8px' }}>QueryHistory</td>
+                        <td style={{ padding: '6px 8px' }}>Populated query history with referenced solutions</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={{ padding: '6px 8px' }}><span className="crud-pill crud-update">UPDATE</span></td>
+                        <td style={{ padding: '6px 8px' }}><code>PUT</code></td>
+                        <td style={{ padding: '6px 8px' }}><code>/api/errors/:id</code></td>
+                        <td style={{ padding: '6px 8px' }}>ErrorCase</td>
+                        <td style={{ padding: '6px 8px' }}>Full update of title, explanation, fix, tips, tags</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={{ padding: '6px 8px' }}><span className="crud-pill crud-update">UPDATE</span></td>
+                        <td style={{ padding: '6px 8px' }}><code>PATCH</code></td>
+                        <td style={{ padding: '6px 8px' }}><code>/api/history/:id</code></td>
+                        <td style={{ padding: '6px 8px' }}>QueryHistory</td>
+                        <td style={{ padding: '6px 8px' }}>Toggle resolved status (true/false)</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={{ padding: '6px 8px' }}><span className="crud-pill crud-delete">DELETE</span></td>
+                        <td style={{ padding: '6px 8px' }}><code>DELETE</code></td>
+                        <td style={{ padding: '6px 8px' }}><code>/api/errors/:id</code></td>
+                        <td style={{ padding: '6px 8px' }}>ErrorCase + Feedback</td>
+                        <td style={{ padding: '6px 8px' }}>Cascading deletion of case and related feedback</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: '6px 8px' }}><span className="crud-pill crud-delete">DELETE</span></td>
+                        <td style={{ padding: '6px 8px' }}><code>DELETE</code></td>
+                        <td style={{ padding: '6px 8px' }}><code>/api/history/:id</code></td>
+                        <td style={{ padding: '6px 8px' }}>QueryHistory</td>
+                        <td style={{ padding: '6px 8px' }}>Remove single history record / clear all records</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* PILLAR 3: AGGREGATION */}
+              <div className="glass-panel" style={{ padding: '20px', background: 'rgba(6, 182, 212, 0.05)', border: '1px solid rgba(6, 182, 212, 0.3)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Zap size={20} color="#22d3ee" />
+                    <h3 style={{ margin: 0, fontSize: '1.05rem', color: '#fff' }}>3. MongoDB Aggregation Pipelines</h3>
+                  </div>
+                  <span className="badge badge-cyan">5 Advanced Pipelines</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.82rem' }}>
+                  <div style={{ background: 'rgba(0,0,0,0.25)', padding: '10px 14px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                      <strong style={{ color: '#38bdf8' }}>🏷️ Tag Frequency Pipeline:</strong>
+                      <span className="stage-badge">$unwind &bull; $group &bull; $sort &bull; $limit</span>
+                    </div>
+                    <p style={{ margin: 0, color: '#94a3b8' }}>Unwinds embedded tags array, groups unique tags, aggregates distinct languages with <code>$addToSet</code>, and sorts top tags.</p>
+                  </div>
+                  <div style={{ background: 'rgba(0,0,0,0.25)', padding: '10px 14px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                      <strong style={{ color: '#818cf8' }}>🔗 Relational Join ($lookup) Pipeline:</strong>
+                      <span className="stage-badge">$lookup &bull; $project &bull; $filter &bull; $avg</span>
+                    </div>
+                    <p style={{ margin: 0, color: '#94a3b8' }}>Performs a left outer join between ErrorCase and Feedback documents, computing average rating and filtered resolution counts without application-side joins.</p>
+                  </div>
+                  <div style={{ background: 'rgba(0,0,0,0.25)', padding: '10px 14px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                      <strong style={{ color: '#34d399' }}>🔀 Multi-Faceted Pipeline ($facet):</strong>
+                      <span className="stage-badge">$facet &bull; $group &bull; $sort &bull; $project</span>
+                    </div>
+                    <p style={{ margin: 0, color: '#94a3b8' }}>Runs 4 sub-pipelines simultaneously in a single round-trip: severity breakdown, category distribution, KPI metrics, and top solved leaderboard.</p>
+                  </div>
+                  <div style={{ background: 'rgba(0,0,0,0.25)', padding: '10px 14px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                      <strong style={{ color: '#fbbf24' }}>🌐 Language Resolution Pipeline:</strong>
+                      <span className="stage-badge">$group &bull; $project &bull; $round &bull; $divide</span>
+                    </div>
+                    <p style={{ margin: 0, color: '#94a3b8' }}>Groups error cases by language and calculates percentage resolution rates using <code>$divide</code> and <code>$multiply</code> math expressions.</p>
+                  </div>
+                  <div style={{ background: 'rgba(0,0,0,0.25)', padding: '10px 14px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                      <strong style={{ color: '#f472b6' }}>📅 Daily Trends Pipeline:</strong>
+                      <span className="stage-badge">$dateToString &bull; $group &bull; $sort</span>
+                    </div>
+                    <p style={{ margin: 0, color: '#94a3b8' }}>Extracts formatted YYYY-MM-DD date strings from ISO timestamps on QueryHistory, aggregating daily query counts and cache-hit ratios.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

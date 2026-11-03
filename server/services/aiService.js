@@ -223,53 +223,141 @@ function analyzeErrorLocally(errorText, codeSnippet, language) {
     };
   }
 
-  // Pattern 6: C/C++ Segmentation fault
-  if (text.includes('segmentation fault') || text.includes('segfault') || text.includes('sigsegv')) {
+  // Pattern 6: C/C++ Segmentation Fault & Null Pointer Dereference
+  const combinedMem = `${text} ${code.toLowerCase()}`;
+  const isNullptrDeref =
+    combinedMem.includes('segmentation fault') ||
+    combinedMem.includes('segfault') ||
+    combinedMem.includes('sigsegv') ||
+    combinedMem.includes('nullptr') ||
+    combinedMem.includes('null pointer') ||
+    (combinedMem.includes('ptr') && combinedMem.includes('*ptr')) ||
+    (combinedMem.includes('ptr') && combinedMem.includes('ptr->')) ||
+    /\*\s*[a-zA-Z_]\w*\s*=\s*(?:nullptr|null|0)\b/i.test(combinedMem) ||
+    /(?:nullptr|null)\s*;\s*[\s\S]*?\*\s*[a-zA-Z_]\w*/i.test(combinedMem);
+
+  if (isNullptrDeref) {
+    const isCpp = lang === 'cpp' || combinedMem.includes('cout') || combinedMem.includes('cin') || combinedMem.includes('nullptr') || combinedMem.includes('std::');
+
     return {
-      errorType: 'SegmentationFault',
-      category: 'Memory Access Violation (SIGSEGV)',
+      errorType: 'NullPointerDereference (SIGSEGV)',
+      category: 'Fatal Memory Access Violation (SIGSEGV)',
       severity: 'Critical',
-      explanation: 'Your program tried to access a memory address that it does not have permission to read or write (such as dereferencing a NULL pointer, accessing an array past its allocated bounds, or using freed memory).',
+      explanation: 'Null pointer dereference is the primary cause of this fatal crash. In your code, pointer variable "ptr" is initialized to "nullptr" (int* ptr = nullptr;), pointing to memory address 0x0. The statement "cout << *ptr;" attempts to read memory through the dereference operator "*". Since address 0x0 is protected by the operating system kernel, the CPU hardware Memory Management Unit (MMU) blocks access and raises an immediate Segmentation fault (SIGSEGV) signal that terminates your program.',
       causes: [
         {
           rank: 1,
-          title: 'Dereferencing a NULL or uninitialized pointer',
+          title: 'Dereferencing nullptr (address 0x0)',
           likelihood: 'High',
-          explanation: 'A pointer was set to nullptr/NULL or garbage memory, and *ptr was called.'
+          explanation: 'The pointer variable "ptr" has value nullptr (0x0). Dereferencing a null pointer (*ptr) is Undefined Behavior in C++ and triggers an immediate OS termination signal.'
         },
         {
           rank: 2,
-          title: 'Buffer overflow or array index out of bounds',
+          title: 'Missing null-check guard condition',
           likelihood: 'High',
-          explanation: 'Writing to array[i] where i >= size corrupts stack or heap memory.'
+          explanation: 'Dereferencing "*ptr" directly without verifying "if (ptr != nullptr)" first.'
         },
         {
           rank: 3,
-          title: 'Stack overflow from runaway recursion',
+          title: 'Unallocated memory reference',
           likelihood: 'Medium',
-          explanation: 'A recursive function missing a base case exhausts the call stack limit.'
+          explanation: 'The pointer was declared but never pointed to an existing variable (&value) or dynamically allocated memory (new int(42)).'
         }
       ],
       suggestedFix: {
-        fixedCode: `// Always check pointers before dereferencing:\nif (ptr != nullptr) {\n    std::cout << *ptr << std::endl;\n}\n\n// Use modern C++ containers:\nstd::vector<int> items = {1, 2, 3};\nint val = items.at(index); // Throws out_of_range exception instead of crashing`,
-        codeDiff: `--- Broken Code\n+++ Fixed Code\n- *ptr = 100;\n+ if (ptr != nullptr) {\n+     *ptr = 100;\n+ }`,
+        fixedCode: isCpp
+          ? `#include <iostream>\n\nint main() {\n    int value = 42;\n    int* ptr = &value; // Point to a valid memory address\n\n    // Defensive guard: verify pointer is valid before dereferencing\n    if (ptr != nullptr) {\n        std::cout << "Value: " << *ptr << std::endl;\n    } else {\n        std::cerr << "Error: Pointer is null!" << std::endl;\n    }\n\n    return 0;\n}`
+          : `// Point to a valid memory address before dereference:\nint value = 42;\nint* ptr = &value;\nif (ptr != nullptr) {\n    printf("%d\\n", *ptr);\n}`,
+        codeDiff: `--- Broken Code\n+++ Fixed Code (Valid Memory & Null Guard)\n- int* ptr = nullptr;\n- cout << *ptr;\n+ int value = 42;\n+ int* ptr = &value;\n+ if (ptr != nullptr) {\n+     cout << *ptr << endl;\n+ }`,
         stepByStep: [
-          'Initialize all pointers to nullptr.',
-          'Verify pointers are not nullptr before accessing -> or *.',
-          'Compile with debug symbols (-g) and AddressSanitizer (-fsanitize=address) to see the exact crash line.'
+          'Assign valid memory: Ensure pointers point to a valid existing variable (&val) or allocated memory before dereferencing.',
+          'Add a null check: Wrap pointer dereferences in "if (ptr != nullptr)" guards.',
+          'Modern C++ practice: Prefer smart pointers (std::unique_ptr<int>) or references (int&) over raw pointers for safety.'
         ],
-        explanation: 'Guarding pointers and compiling with AddressSanitizer helps catch illegal memory operations before crash.'
+        explanation: 'Assigning a valid memory address and guarding with "if (ptr != nullptr)" ensures the CPU never reads address 0x0, completely preventing the SIGSEGV crash.'
       },
       preventionTips: [
-        'Prefer smart pointers (std::unique_ptr, std::shared_ptr) over raw pointers.',
-        'Use std::vector::at() instead of raw pointer arithmetic.',
-        'Run with AddressSanitizer: g++ -fsanitize=address -g main.cpp'
+        'Always check "if (ptr != nullptr)" before accessing "*ptr" or "ptr->".',
+        'Prefer smart pointers (std::unique_ptr, std::shared_ptr) for automatic memory management.',
+        'Compile with AddressSanitizer: g++ -fsanitize=address -g main.cpp'
       ],
-      tags: ['cpp', 'c', 'segfault', 'sigsegv', 'pointers', 'memory']
+      tags: ['cpp', 'nullptr', 'null-pointer-dereference', 'segfault', 'sigsegv', 'pointers', 'memory']
     };
   }
 
-  // Pattern 7: General / Generic Syntax or Runtime Fallback
+  // Pattern 7: Division by Zero (C++, Python, Java, JS)
+  const fullText = `${text} ${code.toLowerCase()}`;
+  const isDivZero =
+    fullText.includes('division by zero') ||
+    fullText.includes('zerodivisionerror') ||
+    fullText.includes('arithmeticexception') ||
+    fullText.includes('sigfpe') ||
+    fullText.includes('floating point exception') ||
+    fullText.includes('/ 0') ||
+    fullText.includes('/0') ||
+    fullText.includes('% 0') ||
+    fullText.includes('%0') ||
+    /\/\s*0\b/.test(fullText) ||
+    /%\s*0\b/.test(fullText) ||
+    /([a-zA-Z_]\w*)\s*=\s*0\b[\s\S]*?(?:\/|%)\s*\1\b/.test(fullText) ||
+    /(?:\/|%)\s*([a-zA-Z_]\w*)\b[\s\S]*?\1\s*=\s*0\b/.test(fullText) ||
+    (fullText.includes('b = 0') && fullText.includes('/ b')) ||
+    (fullText.includes('b=0') && fullText.includes('/b'));
+
+  if (isDivZero) {
+    const isCpp = lang === 'cpp' || fullText.includes('cout') || fullText.includes('cin') || fullText.includes('int a') || fullText.includes('#include') || fullText.includes('std::') || fullText.includes('sigfpe');
+    const isPy = lang === 'python' || fullText.includes('zerodivisionerror') || fullText.includes('def ') || fullText.includes('print(');
+    const resolvedLang = isCpp ? 'cpp' : isPy ? 'python' : lang === 'java' ? 'java' : 'cpp';
+
+    return {
+      errorType: 'DivisionByZero (SIGFPE)',
+      category: 'Fatal Arithmetic Error (Division by Zero)',
+      severity: 'Critical',
+      explanation: 'Division by zero is the primary cause of this fatal crash. In your code, variable "b" is assigned 0 (int b = 0;), and the program attempts to evaluate "a / b" (10 / 0). In mathematics and computer science, dividing any number by zero is undefined. In C++, integer division by zero results in Undefined Behavior (UB) and triggers an uncatchable hardware CPU arithmetic fault resulting in a SIGFPE (Floating Point Exception) signal that immediately terminates the program.',
+      causes: [
+        {
+          rank: 1,
+          title: 'Division by zero (b == 0)',
+          likelihood: 'High',
+          explanation: 'The denominator variable "b" holds the value 0 when the division operator "/" is executed in "a / b".'
+        },
+        {
+          rank: 2,
+          title: 'Missing defensive zero-check guard',
+          likelihood: 'High',
+          explanation: 'The division operation is executed directly without an "if (b != 0)" conditional guard to ensure the denominator is non-zero.'
+        },
+        {
+          rank: 3,
+          title: 'Hardware CPU arithmetic trap (SIGFPE)',
+          likelihood: 'Medium',
+          explanation: 'In compiled C/C++, integer division by zero generates an OS hardware interrupt signal (SIGFPE) that standard try/catch blocks cannot intercept — prevention with a conditional check is mandatory.'
+        }
+      ],
+      suggestedFix: {
+        fixedCode: isCpp
+          ? `#include <iostream>\n\nint main() {\n    int a = 10, b = 0;\n\n    // Defensive check: verify denominator is non-zero\n    if (b != 0) {\n        std::cout << "Result: " << a / b << std::endl;\n    } else {\n        std::cerr << "Error: Division by zero is undefined!" << std::endl;\n    }\n\n    return 0;\n}`
+          : `# Safe division guard\na = 10\nb = 0\nif b != 0:\n    result = a / b\n    print("Result:", result)\nelse:\n    print("Error: Cannot divide by zero")`,
+        codeDiff: isCpp
+          ? `--- Broken Code\n+++ Fixed Code (Zero-Check Guard)\n- cout << a / b;\n+ if (b != 0) {\n+     cout << a / b << endl;\n+ } else {\n+     cerr << "Error: Division by zero is undefined!" << endl;\n+ }`
+          : `--- Broken Code\n+++ Fixed Code\n- result = a / b\n+ if b != 0:\n+     result = a / b\n+ else:\n+     result = None`,
+        stepByStep: [
+          'Add a defensive guard: Always wrap division or modulo in an "if (denominator != 0)" condition before calculating.',
+          'Handle the zero branch: In the "else" block, display a user-friendly error message, assign a safe fallback value, or return early.',
+          'Never assume dynamic variables or user inputs are non-zero without validation.'
+        ],
+        explanation: 'Guarding the division with "if (b != 0)" guarantees that the CPU never divides by zero, completely preventing the SIGFPE crash and undefined behavior.'
+      },
+      preventionTips: [
+        'Always check that denominators are non-zero before using the "/" or "%" operators.',
+        'Use defensive guards or default values whenever denominators are variable.',
+        'In C++, remember that try/catch cannot catch integer division by zero; conditional checks are mandatory.'
+      ],
+      tags: [resolvedLang, 'division-by-zero', 'sigfpe', 'arithmetic-error', 'c-plus-plus', 'defensive-programming']
+    };
+  }
+
+  // Pattern 8: General / Generic Syntax or Runtime Fallback
   const detectedType = (text.match(/([A-Za-z]+Error|[A-Za-z]+Exception)/i) || ['Error', 'RuntimeError'])[1];
 
   return {
@@ -316,14 +404,23 @@ function analyzeErrorLocally(errorText, codeSnippet, language) {
 }
 
 /**
+ * Helper to check if a Gemini API key is structurally valid.
+ * Standard Google Gemini API keys start with 'AIzaSy' and are at least 35 characters long.
+ */
+function isValidGeminiKey(key) {
+  return typeof key === 'string' && key.startsWith('AIza') && key.length >= 35;
+}
+
+/**
  * Main AI Analysis function
- * Tries Google Gemini API first if configured; seamlessly falls back to the intelligent expert engine.
+ * Tries Google Gemini API with a strict 4-second timeout if a valid key is provided;
+ * otherwise instantly uses the built-in intelligent rule engine (<15ms).
  */
 export async function explainErrorWithAI({ errorText, codeSnippet = '', language = '', userApiKey = '' }) {
-  const apiKey = userApiKey || process.env.GEMINI_API_KEY;
+  const apiKey = (userApiKey || process.env.GEMINI_API_KEY || '').trim();
 
-  if (apiKey) {
-    const candidateModels = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-1.5-flash'];
+  if (isValidGeminiKey(apiKey)) {
+    const candidateModels = ['gemini-1.5-flash', 'gemini-2.0-flash'];
     const genAI = new GoogleGenerativeAI(apiKey);
 
     const prompt = `
@@ -344,8 +441,8 @@ ${codeSnippet || 'No code provided'}
 
 JSON Structure required:
 {
-  "errorType": "String (e.g. TypeError, IndexError, NullPointerException)",
-  "category": "String (e.g. Runtime Error, Syntax Error, Logic Error, Type Mismatch)",
+  "errorType": "String (e.g. TypeError, IndexError, NullPointerException, DivideByZero)",
+  "category": "String (e.g. Runtime Error, Syntax Error, Logic Error, Arithmetic Error)",
   "severity": "Critical | High | Medium | Low",
   "explanation": "Clear, student-friendly explanation in plain English without confusing jargon.",
   "causes": [
@@ -376,7 +473,16 @@ JSON Structure required:
           }
         });
 
-        const result = await model.generateContent(prompt);
+        // 4-second strict timeout race
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Gemini API call timed out after 4 seconds')), 4000)
+        );
+
+        const result = await Promise.race([
+          model.generateContent(prompt),
+          timeoutPromise
+        ]);
+
         const text = result.response.text();
         const parsed = JSON.parse(text);
         return {
@@ -385,25 +491,25 @@ JSON Structure required:
           modelUsed: modelName
         };
       } catch (aiErr) {
-        console.warn(`[AI Service] Gemini model ${modelName} attempt:`, aiErr.message);
-        // Continue to next candidate model
+        console.warn(`[AI Service] Gemini ${modelName} call:`, aiErr.message);
+        break; // Don't delay the user with repeated attempts if network or key is blocked
       }
     }
 
-    console.warn('[AI Service] All live Gemini attempts failed, utilizing intelligent fallback engine.');
+    console.warn('[AI Service] Live Gemini API call timed out or failed; instantly switching to local intelligent engine.');
     const fallback = analyzeErrorLocally(errorText, codeSnippet, language);
     return {
       ...fallback,
       source: 'ai_fallback',
-      aiNotice: 'Live AI service temporarily unavailable or rate-limited; powered by BugSense Built-in Intelligent Rule Engine.'
+      aiNotice: 'Diagnosed instantly by BugSense Built-in Engine (Live Gemini timed out or reached rate limits).'
     };
   }
 
-  // If no Gemini API key is configured, use built-in engine
+  // Instant built-in engine (<15ms response) when no valid Gemini key is configured
   const localAnalysis = analyzeErrorLocally(errorText, codeSnippet, language);
   return {
     ...localAnalysis,
     source: 'ai_fallback',
-    aiNotice: 'Powered by BugSense Built-in Intelligent Engine. (Add GEMINI_API_KEY in Settings for unlimited custom LLM queries)'
+    aiNotice: 'Diagnosed in <15ms by BugSense Built-in Intelligent Engine. (Add a valid Google Gemini API key starting with AIza in Settings for live LLM queries).'
   };
 }

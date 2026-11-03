@@ -78,7 +78,16 @@ export function detectLanguage(errorText = '', code = '') {
   if (combined.includes('java.lang.') || combined.includes('system.out.println') || combined.includes('public static void main') || combined.includes('nullpointerexception')) {
     return 'java';
   }
-  if (combined.includes('segmentation fault (core dumped)') || combined.includes('#include <') || combined.includes('std::') || combined.includes('nullptr') || combined.includes('malloc(')) {
+  if (combined.includes('segmentation fault (core dumped)') ||
+      combined.includes('#include') ||
+      combined.includes('std::') ||
+      combined.includes('cout') ||
+      combined.includes('cin') ||
+      combined.includes('endl') ||
+      combined.includes('int main') ||
+      combined.includes('nullptr') ||
+      combined.includes('sigfpe') ||
+      combined.includes('malloc(')) {
     return 'cpp';
   }
   if (combined.includes('select ') || combined.includes('from ') || combined.includes('where ') || combined.includes('syntax error at or near')) {

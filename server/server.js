@@ -6,7 +6,9 @@ import errorsRouter from './routes/errors.js';
 import historyRouter from './routes/history.js';
 import analyticsRouter from './routes/analytics.js';
 import statusRouter from './routes/status.js';
+import authRouter from './routes/auth.js';
 import { seedDatabase } from './services/seedData.js';
+import { errorHandler } from './middleware/errorHandler.js';
 
 dotenv.config();
 
@@ -16,7 +18,7 @@ const PORT = process.env.PORT || 5000;
 // Middleware
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key']
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -31,6 +33,10 @@ app.use('/api/errors', errorsRouter);
 app.use('/api/history', historyRouter);
 app.use('/api/analytics', analyticsRouter);
 app.use('/api/status', statusRouter);
+app.use('/api/auth', authRouter);
+
+// Centralized Error Handler (handles Mongoose ValidationError, CastError, and HTTP errors)
+app.use(errorHandler);
 
 // Start server and connect to MongoDB
 async function startServer() {
@@ -38,7 +44,7 @@ async function startServer() {
     console.log('[Server] Connecting to MongoDB...');
     await connectDB();
     
-    // Auto-seed initial errors if database is fresh
+    // Auto-seed initial errors, feedback, and history if database is fresh
     await seedDatabase(false);
 
     app.listen(PORT, () => {
@@ -51,3 +57,5 @@ async function startServer() {
 }
 
 startServer();
+
+export default app;
