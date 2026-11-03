@@ -43,7 +43,7 @@ import LandingPage from './LandingPage.jsx';
 
 const getApiBase = () => {
   const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE;
-  if (envUrl) {
+  if (envUrl && !envUrl.includes('bugsense-ai-server.onrender.com')) {
     const clean = envUrl.trim().replace(/\/+$/, '');
     return clean.endsWith('/api') ? clean : `${clean}/api`;
   }

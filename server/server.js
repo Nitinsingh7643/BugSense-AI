@@ -23,22 +23,27 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
+// Router for all API endpoints
+const apiRouter = express.Router();
+
+apiRouter.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'BugSense AI Backend', timestamp: new Date() });
 });
 
-// Mount Routes
-app.use('/api/errors', errorsRouter);
-app.use('/api/history', historyRouter);
-app.use('/api/analytics', analyticsRouter);
-app.use('/api/status', statusRouter);
-app.use('/api/auth', authRouter);
+apiRouter.use('/errors', errorsRouter);
+apiRouter.use('/history', historyRouter);
+apiRouter.use('/analytics', analyticsRouter);
+apiRouter.use('/status', statusRouter);
+apiRouter.use('/auth', authRouter);
+
+// Mount router on both '/api' and '/' to ensure full compatibility with Vercel rewrites & standalone Node
+app.use('/api', apiRouter);
+app.use('/', apiRouter);
 
 // Centralized Error Handler (handles Mongoose ValidationError, CastError, and HTTP errors)
 app.use(errorHandler);
 
-// Start server and connect to MongoDB
+// Start server and connect to MongoDB in standalone mode
 async function startServer() {
   try {
     console.log('[Server] Connecting to MongoDB...');
@@ -56,6 +61,9 @@ async function startServer() {
   }
 }
 
-startServer();
+// Auto-start server in standalone Node environment (skipped in Vercel serverless)
+if (!process.env.VERCEL) {
+  startServer();
+}
 
 export default app;
